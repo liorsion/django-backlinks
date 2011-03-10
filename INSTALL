@@ -1,0 +1,11 @@
+===========================
+Installing Django Backlinks
+===========================
+
+To install Django Backlinks, run the following command inside this directory::
+
+    python setup.py install
+
+Django Backlinks requires Python 2.5 or newer and Django 1.0 or newer.
+It is possible that it will work without incident on Python 2.3 and/or with an
+earlier version of Django, but these configurations have not been tested.

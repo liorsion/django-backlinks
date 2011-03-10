@@ -1,0 +1,8 @@
+include README
+include LICENSE
+include INSTALL
+include AUTHORS
+include MANIFEST.in
+recursive-include docs *
+recursive-include src/backlinks/fixtures *
+recursive-include src/backlinks/trackback/templates *

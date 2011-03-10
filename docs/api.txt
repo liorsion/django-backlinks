@@ -1,0 +1,464 @@
+========================
+The Django Backlinks API
+========================
+
+This document describes the API provided by Django Backlinks. For discussion
+of how to use Django Backlinks in a Django project, please see the
+``overview.txt`` document found alongside this in the ``docs/`` directory.
+
+Servers
+=======
+
+Django Backlinks provides a base class for writing backlink protocol servers
+as well as subclasses of this base class that implement servers for the
+Pingback and TrackBack protocols.
+
+``backlinks.server.BacklinksServer``
+------------------------------------
+
+This is the base server class that provides the basic features and utilities
+for specific protocol servers. Its basic responsibilities are validating
+ping sources, targets, and recording ping requests.
+
+Attributes
+~~~~~~~~~~
+
+The following attributes are defined on the ``BacklinksServer`` class and may
+be overridden on derived classes.
+
+    url_reader
+        A callable which accepts an absolute URI argument and returns an object
+        that behaves like ``ResponseWrapper``.
+
+    protocol
+        A short string representing the name of the protocol used.
+
+
+Methods
+~~~~~~~
+
+The following methods are available on the ``BacklinksServer`` class and may
+be overridden on derived classes. Note that these methods should raise the
+appropriate ``BacklinkServerError`` subclass upon failure.
+
+    get_target_uri
+        Given a target object, returns the absolute URI for the object. In the
+	base implementation, it attempts to build an absolute URI from the
+	target object's ``get_absolute_url`` method, if it exists, and the
+	current ``Site`` object from the ``django.contrib.sites`` framework.
+
+    validate_source_uri
+        Validates that the given source URI is in fact a URI and appears to
+	point to a valid ping source.
+
+    validate_target_uri
+	Validates that the given target URI is in fact a URI and appears to
+	point to a valid ping target.
+   
+    validate_unregistered
+	Validates that the ping from the given source URI to the given target
+	URI and target object has not been registered.
+
+    get_source
+	Retrieve the source of the ping request. In the base implementation
+	simply returns the results of calling ``url_opener`` with the source
+	URI.
+
+    validate_source
+	Validate that the source meets our criteria. In the base implementation
+	the source is checked for having an appropriate markup type, and
+	containing a link to the given target URI.
+
+    get_title
+        Given the source markup document, returns a string containing the title
+	of the source resource.
+
+    get_excerpt
+	Given the source markup document and the target URI, returns a string
+	containing a contextual excerpt from the source document.
+
+    record_successful_ping
+	Called when a ping request passes all validation steps. In the base
+	implementation this creates and saves an ``InboundBacklink`` instance.
+
+    record_unsuccessful_ping
+	Called when a ping request fails a validation step. In the base
+	implementation this does nothing.
+
+    register_ping
+	This is the workhorse method of the server. It validates the source
+	and target and generates all necessary data for the record, calling
+	the ``record_successful_ping`` method if validation succeeds, or
+	the ``record_unsuccessful_ping`` method if any validation step
+	fails.
+
+Subclasses should provide ``get_target_object`` and  ``validate_target``
+method implementations. If you intend to use your ``BacklinksServer`` subclass
+as a Django view, you should also implement a ``__call__`` method which
+accepts a ``request`` argument first, as well as ``*args`` and ``**kwargs``.
+
+``backlinks.pingback.server.PingbackServer``
+--------------------------------------------
+
+This is a subclass of ``backlinks.server.BacklinksServer`` which provides
+implementation details specific to servers for the Pingback protocol.
+
+Methods
+~~~~~~~
+
+``PingbackServer`` defines some methods specific to the Pingback
+implementation which subclasses may wish to override.
+
+    __init__
+        The ``__init__`` method in the base implementation accepts optional 
+	``path`` and ``absolute_uri`` arguments which are used as overrides
+	for the value returned by the ``get_path`` and ``get_absolute_uri``
+	methods. The view registry is also initialized.
+
+    get_path
+	This returns the path at which the server is mounted. The base
+	implementation returns either the known override or attempts to
+	determine the server's path using
+	``django.core.urlresolvers.reverse`` with the current instance as the
+	view object argument.
+
+    get_absolute_uri
+        This returns the full absolute URI at which the server is mounted. The
+	base implementation returns either the known override or attempts to
+	determine the absolute URI using the ``django.contrib.sites`` framework
+	and the optional ``request`` argument if one is passed, and the
+	``get_path`` method.
+
+    add_view_to_registry
+	Adds the given view, target lookup callable and target validator
+	callable to the server's registry.
+
+    register_view
+	In the base implementation, this method wraps the view in a function
+	which modifies the given view's returned response with the appropriate
+	``X-Pingback`` header if the response represents a known good Pingback
+	ping target. It adds the wrapped view as well as the given target
+	lookup callable and target validator callable to the server's registry
+
+    get_target_object
+	Given a target's absolute URI, looks up the view associated with the
+	URI in the server's registry, and then attempts to use the stored
+	``target_lookup`` callable to retrieve and return the associated target
+	object. This will raise ``BacklinkTargetDoesNotExist`` if the target
+	object lookup fails.
+
+    validate_target
+        Attempts to run the registered ``target_validator`` for the target
+	object, raising ``BacklinkTargetNotPingable`` if the validator fails.
+
+    xmlrpc_dispatch
+        This method performs the work of translating and validating the XML-RPC
+	request package, calling the ``register_ping`` method with the given
+	arguments, and building a valid XML-RPC response body.
+
+    __call__
+	In the base ``PingbackServer`` implementation, this does the work of
+	building an ``HttpResponse`` object from the result of calling the
+	``xmlrpc_dispatch`` method.
+
+``backlinks.trackback.server.TrackBackServer``
+----------------------------------------------
+
+This is a subclass of ``backlinks.server.BacklinksServer`` which provides
+implementation details specific to servers for the TrackBack protocol.
+
+The ``TrackBackResponse`` class
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``TrackBackResponse`` is a subclass of Django's ``HttpResponse`` class that
+can build a TrackBack response XML document. It's first argument is
+``error_message``, which should be a string representing the error the
+server encountered in processing the ping request.
+
+Methods
+~~~~~~~
+
+When subclassing ``TrackBackServer`` the following methods may be of interest:
+
+    __init__
+	The base implementation requires a ``target_lookup`` callable as the
+	first argument and a ``target_validator`` callable as the second
+	argument.
+
+    validate_content_type
+	Validates that the request was sent with the appropriate 'Content-Type'
+	header, which is defined by the spec as containing the mimetype
+	'application/x-www-form-urlencoded'. If this is not the case, a 
+	``BacklinkServerError`` is raised.
+
+    get_target_object
+	This method returns the target object for the ping. In the base
+	implementation it simply calls the ``target_lookup`` object with
+	arguments passed along from the ``__call__`` method. It raises
+	``BacklinkTargetDoesNotExist`` upon failure.
+
+    validate_target
+        This method raises ``BacklinksTargetNotPingable`` upon failure. In the
+	base implementation, it simply calls the ``target_validator`` object with
+	the ``target_object`` as its argument.
+
+    __call__
+	In the base implementation, this validates the request, then calls the
+	``get_target_object`` method, passing along the arguments and keyword 
+	arguments it receives, then calls ``register_ping`` with other required
+	arguments pulled from the ``request.POST`` ``QueryDict``. It returns a
+	``TrackBackResponse``. This response is built with an ``error_message``
+	derived from any ``BacklinkServerError`` encountered while processing
+	the ping request.
+	
+Clients
+=======
+
+Django Backlinks provides a utility client class for automatically discovering
+pingable resources and automatically pinging discovered pingable resources.
+Client implementations for specific backlink protocols should be classes which
+define ``autodiscover`` and ``ping`` methods discussed below. The utility
+client class may then use any protocol-specific client class instance found as
+the third element in each member of the ``INSTALLED_MODULES`` list.
+
+``backlinks.client.BacklinksClient``
+------------------------------------
+
+Attributes
+~~~~~~~~~~
+
+    url_opener
+        A callable which returns an object that behaves like ``ResponseWrapper``
+
+Methods
+~~~~~~~
+
+    discover_backlinks
+	Given a markup document, parses out all external links, and tries the
+	``autodiscover`` method on the client instance of each
+	``INSTALLED_MODULES``. It returns a list of tuples of the form
+	(target URI, ping server URI, client instance, protocol name).
+
+    ping_all
+	Runs ``discover_backlinks`` and then attempts to use the ``ping`` method
+	of the client instance in each of the returned tuples. It passes through
+	any arguments it is given, attempting to automatically generate those
+	not given.
+
+Protocol clients
+================
+
+Protocol clients should provide two methods in order to be usable through the
+base ``BacklinksClient`` class. These methods are:
+
+    autodiscover
+	Given a link and a ``ResponseWrapper`` like object, search for any
+	autodiscovery mechanism the protocol defines, and return the backlink
+	server URI upon success.
+
+    ping
+	Given a ping server URI, the target URI, the source URI, and any
+	additional positional and keyword arguments, attempt a ping. This
+	should raise the appropriate ``BacklinkClientError`` upon failure,
+	otherwise, return ``True``.
+
+``backlinks.pingback.client.PingbackClient``
+--------------------------------------------
+
+This class implements the protocol client interface described above for the
+Pingback protocol.
+
+``backlinks.pingback.client.TrackBackClient``
+---------------------------------------------
+
+This class implements the protocol client interface described above for the
+TrackBack protocol.
+
+
+Models
+======
+
+Django Backlinks provides two models: ``InboundBacklink`` for recording
+received pings and ``OutboundBacklink`` for recording sent pings.
+
+``backlinks.models.InboundBacklink``
+------------------------------------
+
+This model is for recording received pings.
+
+Fields
+~~~~~~
+
+    source_url
+	The absolute URI of the source of the recorded ping
+    target_url
+	The absolute URI of the target of the recorded ping
+    received
+	The datetime the ping was recorded
+    title
+	The title of the resource that was the source of the ping
+    excerpt
+	An excerpt from or summary of the resource that was the source
+	of the ping
+    status
+	An integer representing the moderation status of the record. 1 is
+	'approved for display', and 2 is 'not approved for display'
+    protocol
+        A short string with the name of the protocol used to ping
+    content_type
+        A ``ForeignKey`` to the ``ContentType`` of the target object
+    object_id
+	The integer id of the target object
+    target_object
+	A ``GenericForeignKey`` for accessing the target object
+    
+
+Manager
+~~~~~~~
+
+``InboundBacklinkManager`` provides two convenience methods for working with
+sets of ``InboundBacklink`` objects:
+    approved
+	Returns the set of all approved ``InboundBacklink`` records
+    for_model
+	Returns all ``InboundBacklink`` records for the passed in model
+	instance
+
+
+``backlinks.models.OutboundBacklink``
+-------------------------------------
+
+This model is for recording sent pings.
+
+Fields
+~~~~~~
+
+    source_url
+	The absolute URI of the source of the sent ping
+    target_url
+	The absolute URI of the target of the sent ping
+    sent
+	The datetime the ping attempt was made
+    title
+	The title of the resource that was the source of the ping
+    excerpt
+	An excerpt from or summary of the resource that was the source
+	of the ping
+    status
+	An integer representing the status of the sent ping attempt. 1 is
+	'pending' or 'unsent', 2 is 'successful', and 3 is 'unsuccessful'
+    protocol
+        A short string with the name of the protocol used to ping
+    message
+	The message the target ping server responded to the ping with
+    content_type
+        A ``ForeignKey`` to the ``ContentType`` of the source object
+    object_id
+	The integer id of the source object
+    target_object
+	A ``GenericForeignKey`` for accessing the target object
+
+
+Manager
+~~~~~~~
+
+The ``OutboundBacklinkManager`` provides the following convenience method:
+
+    for_model
+	Returns a ``QuerySet`` of all ``OutboundBacklink`` records for the
+	passed in model instance
+
+Utilities
+=========
+
+Django Backlinks provides a number of utility modules for performing various
+tasks related to sending and processing received pings.
+
+URL opening and reading
+-----------------------
+
+``backlinks.utils.urlreader`` defines two classes of interest, ``URLReader`` and
+``ResponseWrapper``.
+
+``URLReader``
+~~~~~~~~~~~~~
+
+This class is a utility for retrieving URLs. Its open method requires an ``url``
+argument, and accepts an optional ``data`` argument, which will be URL encoded
+and sent as POST data. It also optionally accepts an ``extra_headers`` dict
+argument, which will be used to update the dict of request headers, and a
+``timeout`` argument, which is an integer number of seconds before the request
+times out. The ``open`` method returns a ``ResponseWrapper`` instance by default.
+
+``ResponseWrapper``
+~~~~~~~~~~~~~~~~~~~
+
+This utility class is used to wrap the ``addinfourl`` response object returned
+by the standard libraries' URL opening utilities. This class performs the tasks
+of decompressing gzipped response streams if necessary, caching the read response
+and determining the character encoding of the response document. It defines a
+property, ``body``, to cache the read response, and read the response if no data
+has yet been read. It defines the ``charset`` property to determine the charset
+from the ``Content-Type`` header or attempts to determine it from the read
+markup if necessary.
+
+A default instance of ``URLReader`` is found by the name
+``backlinks.utils.url_reader`` for convenience. It is important to note that
+this default instance limits the amount of data to be read from responses to the
+number of bytes specified by the ``MAX_URL_READ_LENGTH`` setting. This is done
+to avoid reading potentially huge response documents into memory.
+
+Parsers
+-------
+
+Django Backlinks provides a number of markup parsers which are used to retrieve
+various bits of data from markup resources. These parsers live in the
+``backlinks.utils.parsers`` namespace.
+
+
+``BaseParser``
+~~~~~~~~~~~~~~
+
+This is the class from which all the other parsers derive. It is a simple
+subclass of the ``sgmllib.SGMLParser`` class found in the standard library
+which offers improved handling of bad markup, improved treatment of text within
+HTML ``script`` and ``textarea`` tags, and normalizes entity references.
+
+``LinkParser``
+~~~~~~~~~~~~~~
+
+Parses out the ``href`` attributes of all found ``a`` tags.
+
+``HttpLinkParser``
+~~~~~~~~~~~~~~~~~~
+
+Parses out the ``href`` attributes of all found ``a`` tags where the ``href``
+value begins with ``'http://'``.
+
+``TitleParser``
+~~~~~~~~~~~~~~~
+
+Parses out a 'title' from any existing ``title`` tags, or the most prominent
+heading tag if no ``title`` exists.
+
+``ContextualExcerptParser``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Parses out a list of 'excerpts' from the given document around a given target 
+url. These 'excerpts' consist of the text surrounding and within all found links
+to the given ``target_url`` up to ``max_words`` in length.
+
+Settings
+========
+
+Django Backlinks uses a settings proxy object to retrieve its overrideable
+settings from a centralized location. This object is found by the name
+``backlinks.conf.settings`` and attribute lookups on it pass through first
+to the project's settings, then to the default settings module found in
+``backlinks.defaults``. This object also provides automatic prefixed lookups
+in the project's settings. That is, when you ask for the ``MY_SETTING``
+attribute of the ``settings`` object, it will look first for an attribute
+``BACKLINKS_MY_SETTING`` on the project's settings object, and then for the
+``MY_SETTING`` attribute of the ``defaults`` module if necessary. For the
+list of configurable settings Django Backlinks makes available, see the
+``settings.txt`` file found alongside this in the ``docs/`` folder.

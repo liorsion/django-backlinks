@@ -1,0 +1,5 @@
+[paths]
+default = https://liorsion@bitbucket.org/jeffkistler/django-backlinks
+
+[ui]
+username = liorsion

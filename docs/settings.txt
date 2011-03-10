@@ -1,0 +1,38 @@
+==================
+Available Settings
+==================
+
+Django Backlinks makes a number of settings available for configuration on a
+per-project basis. All settings should be prefixed by ``BACKLINKS_`` when
+used in a project's settings module. The available settings are:
+
+    ``INSTALLED_MODULES``
+	Default:
+	    [('pingback', 'Pingback', 'backlinks.pingback.client.default_client'),
+	     ('trackback', 'TrackBack', 'backlinks.trackback.client.default_client'),]	
+
+	An iterable of 3-tuples of the form (protocol name, protocol display
+	name, string import path for an instance of the protocol's client).
+	This is used by the default super client to discover and ping external
+	pingable resources as well as record these pings.
+
+    ``MAX_EXCERPT_WORDS``
+	Default:
+	    32
+
+	A positive integer representing the maximum number of words to be used
+	in generated excerpts.
+
+    ``MAX_URL_READ_LENGTH``
+	Default:
+	    8192
+
+	The maximum number of bytes the default URL reader will read from
+	external resources.
+
+    ``USER_AGENT_STRING``
+	Default:
+	    "Django Backlinks 0.1a"
+
+	The string sent in ``User-Agent`` when the default URL reader and
+	XML-RPC proxy objects request external resources.

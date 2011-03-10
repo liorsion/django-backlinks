@@ -1,0 +1,15 @@
+================
+Django Backlinks
+================
+
+Django Backlinks is a framework for adding backlink, such as
+TrackBack <http://www.sixapart.com/pronet/docs/trackback_spec> and
+Pingback <http://hixie.ch/specs/pingback/pingback> capabilities to Django
+applications and projects built on the Django web framework
+<http://www.djangoproject.com/>.
+
+For installation instructions, please read the ``INSTALL`` file located in
+this directory.
+
+For instructions on the usage of this application, please read ``overview.txt``
+located in the ``docs/`` directory.

@@ -1,0 +1,411 @@
+===========================
+Django Backlinks - Overview
+===========================
+
+This document gives a brief overview and examples of using Django Backlinks
+in a Django project.
+
+Using Django Backlinks in a Project
+===================================
+
+Once the Django Backlinks package is installed you can add it to a Django
+project like so:
+    
+    1. Put ``'backlinks'`` in your ``INSTALLED_APPS`` setting.
+    2. Run the command ``manage.py syncdb``
+
+These steps create the necessary database tables for Django Backlinks.
+
+Setting up the Pingback server
+------------------------------
+
+Enabling the server
+^^^^^^^^^^^^^^^^^^^
+
+In order to have the Pingback server module handle pingback requests, you
+must create an URL pattern with an instance of
+``backlinks.pingback.server.PingbackServer`` as the view argument. For 
+convenience, the ``backlinks.pingback.server`` module contains a default
+instance for your use named ``default_server``. For example, the following
+snippet from a ``ROOT_URLCONF`` module allows the ``default_server`` instance
+to handle incoming Pingback pings::
+    
+    urlpatterns = ('',
+        # ...
+        (r'^pingback/$', 'backlinks.pingback.server.default_server')
+        # ...
+    )
+
+This pattern allows incoming Pingback requests to be handled by the URL path
+``/pingback/``.
+
+
+Registering views and objects as Pingback targets
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The next step is to register a view representing an object as a Pingback 
+target. The Pingback server class provides the ``register_view`` method
+for registering a view with the server. It requires two arguments in order
+to operate: a ``target_lookup`` callable, and a ``target_validator``
+callable. The ``target_lookup`` argument is used to retrieve a target
+object given a URI, and the ``target_validator`` argument is used to
+determine whether or not the retrieved object may be used as a ping
+target.
+
+You should take care to use the ``register_view`` method correctly. In 
+addition to registering the view with the server, it wraps the given 
+view to supply the ``X-Pingback`` response header clients will use to
+autodiscover the server and returns this wrapper. It determines whether to 
+add the ``X-Pingback`` header to the response intelligently by retrieving 
+the associated object and validating that it may be used as a target. 
+Therefore you must ensure that the URL pattern for your object's view 
+receives the result of the call to ``register_view`` as its view parameter.
+
+If you wish to manually control the Pingback autodiscovery features for your
+view, you may alternately use the ``add_view_to_registry`` method of the class 
+to register your view with the server without wrapping it.
+
+The object lookup function
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The object lookup function must accept the same arguments and keyword arguments
+as its associated view and it must return an object or raise an instance of
+``django.core.exceptions.ObjectDoesNotExist``.
+
+The object validator function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The object validator function must accept two positional arguments: the target
+object and the target url. It must return ``True`` if the object and/or URL is a
+valid Pingback target, or ``False`` if the object may not be used as a Pingback
+target.
+
+An example - registering a model and a view
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In the following example, we want to register a Django Model object called
+``BlogEntry`` and its associated generic ``object_detail`` view as a target for
+Pingback requests. Suppose we have defined ``BlogEntry`` in our ``blog`` app's
+``models.py`` as follows::
+
+    from django.db import models
+    
+    class BlogEntry(models.Model):
+	author = models.ForeignKey('auth.User')
+	date = models.DateField(auto_now_add=True)
+	title = models.CharField(max_length=256)
+	slug = models.SlugField(max_length=32, unique=True)
+	content = models.TextField()
+	backlinks_enabled = models.BooleanField(default=True)
+
+We may find it convenient to use ``django.views.generic.list_detail.object_detail``
+as the view for individual ``BlogEntry`` resources. So in order to make our
+``BlogEntry`` objects pingable by Pingback clients, we need to register 
+the ``object_detail`` view along with its associated ``BlogEntry`` lookup and 
+validator functions with the Pingback server we hooked up in our ``urls.py``.
+We may choose to do this in a ``backlinks_config.py`` module within our 
+project, which would look like the following::
+
+    from django.views.generic.list_detail import object_detail
+    
+    from blog.models import BlogEntry
+    from backlinks.pingback.server import default_server
+
+    def get_blog_entry(slug=None):
+        return BlogEntry.objects.get(slug=slug)
+
+    def entry_is_backlinkable(entry, url):
+        if entry:
+            return entry.backlinks_enabled
+        return False
+        
+    def entry_detail(request, slug=None):
+        return object_detail(request, 
+	                     queryset=BlogEntry.objects.all(),
+			     slug=slug,
+			     template_object_name='entry')
+
+    entry_detail = default_server.register_view(entry_detail, get_blog_entry, entry_is_backlinkable)
+
+This simple configuration allows the ``object_detail`` view used to display 
+individual ``BlogEntry`` resources to be used as Pingback targets. The object 
+lookup function ``get_blog_entry`` uses roughly the same logic as the view to 
+retrieve specific ``BlogEntry`` records, and raises ``BlogEntry.DoesNotExist`` 
+if the object cannot be found. The validator function ``entry_is_backlinkable``
+checks to see if the ``backlinks_enabled`` flag has been set to ``True``, and 
+if so the pingback server will proceed to attempt to register a ping
+against it.
+
+Now in our project's ``urls.py`` we must use the ``backlinks_config.entry_detail``
+function as the view for our entry detail URL pattern like so::
+
+    from django.conf.urls.defaults import *
+
+    urlpatterns = patterns('',
+        # ...
+	url(r'^blog/(?P<slug>[\w-]+)/$', 'myproject.backlinks_config.entry_detail', name='entry-detail'),
+        url(r'^blog/', include('blog.urls')),
+	url(r'^pingback/$', 'backlinks.pingback.server.default_server', name='pingback-server'),
+	# ...
+    )
+
+Making the Pingback server discoverable by clients
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As explained above, the ``register_view`` method of ``PingbackServer`` takes
+care of adding the ``X-Pingback`` header to responses generated by your 
+Pingback-enabled view when appropriate. Many Pingback clients can use this
+header to recognize possible Pingback targets and appropriately direct pings
+to the server given by its value.
+
+Some clients, however, may not be aware of, or may not be able to use this
+header. To accommodate these clients, we may wish to customize the template 
+rendered by our ``entry_detail`` view to provide a ``link`` element 
+containing the absolute URI for our server that they may use for Pingback 
+server autodiscovery. The Pingback implementation in Django Backlinks comes
+with a template tag, ``pingback_link`` for displaying this element. To make
+this tag available for use in templates, place ``'backlinks.pingback'`` in your
+project setting's ``INSTALLED_APPS``. We may then use this tag in a template by
+passing it the name of a variable containing our Pingback server's path as the
+first argument, and passing an optional ``True`` or ``False`` second argument
+to tell the tag to render the link as an XHTML element. This optional argument
+defaults to ``False``, meaning it will render the ``link`` element as an HTML
+element. An example::
+
+    # In our base.html template
+    <html>
+      <head>
+      {% block head_extra %}{% endblock %}
+      <title>{% block title %}{% endblock %}</title>
+      </head>
+    ...
+
+    # In our blog/blogentry_detail.html template
+    {% extends "base.html" %}
+    {% block head_extra %}
+    {% load pingback_tags %}
+    {% if entry.backlinks_enabled %}{% url pingback-server as pingback_url %}{% pingback_link pingback_url %}{% endif %}
+    {% endblock %}
+
+When ``blog/blogentry_detail.html`` is rendered with a ``backlinks_enabled``
+``entry`` object, the output may look like::
+
+    ...
+    <head>
+    <link rel="pingback" href="http://example.com/pingback/">
+    <title>...</title>
+    </head>
+    ...
+
+Setting up the TrackBack server
+-------------------------------
+
+Enabling the server
+^^^^^^^^^^^^^^^^^^^
+
+Django Backlinks comes with a simple server class you can use as view for
+handling incoming TrackBack requests. This class is found in the
+``backlinks.trackback.server`` module under the name ``TrackBackServer``.
+The constructor for TrackBackServer requires two positional arguments:
+
+    ``target_lookup``
+
+        A function for retrieving a ping target object using any additional 
+	positional or keyword arguments passed to the view
+
+    ``target_validator``
+
+        A function that returns a boolean representing the eligibility of a
+        given object and/or URL to be a ping target. Accepts two positional
+        arguments, the object and the URL.
+
+Like ``PingbackServer`` instances, ``TrackBackServer`` instances are callable 
+and therefore may be used as Django views. We could write an URL pattern for our
+``BlogEntry`` TrackBack server, continuing with the  the configuration explained
+above in the Pingback server section. It may now look like so::
+
+    # ...
+    from backlinks.trackback.server import TrackBackServer
+    from myproject.backlinks_config import get_blog_entry, entry_is_backlinkable
+
+    urlpatterns = patterns('',
+        # ...
+        url(r'^trackback/blog/(?P<slug>[\w-]+)/$', 
+	    TrackBackServer(get_blog_entry, entry_is_backlinkable),
+	    name='blogentry-trackback'
+	),
+        # ...
+    )
+
+With this configuration our site can now receive a TrackBack ping for a 
+``BlogEntry`` identified by ``slug`` at the URL path ``/trackback/blog/slug/``.
+
+Making the TrackBack server discoverable by clients
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Django Backlinks provides a template tag, named ``trackback_rdf`` for embedding
+the TrackBack RDF document used by TrackBack clients to autodiscover TrackBack 
+servers. To enable this template tag for use, we must add 
+``backlinks.trackback`` to ``INSTALLED_APPS`` in our project's settings module,
+then use the ``load`` tag in our template, passing ``trackback_tags`` as the
+argument. Continuing with the example from the Pingback section above::
+    
+    # In our blog/blogentry_detail.html template
+    ...
+    {% block head_extra %}
+    {% load trackback_tags %}
+    ...
+    {% endblock %}
+
+We may now use the ``trackback_rdf`` tag by passing it its required positional
+arguments, which are as follows:
+
+    ``object URL``
+        A context variable containing the path for our object's view
+
+    ``object title``
+        A context variable containing a title string for our object
+
+    ``trackback server URL``
+        A context variable containing the path for our TrackBack server's view
+
+    ``enclose in comment tag``
+        A string that evaluates to boolean True/False, which determines whether
+	the RDF document will be enclosed in quote tags
+    
+The ``trackback_rdf`` tag will generate absolute URIs if necessary using the
+``django.contrib.sites`` framework and falling back to searching the context
+for a variable named "request" that contains the current ``HttpRequest``
+object. Continuing our example, we may write::
+
+    ...
+    {% load trackback_tags %}
+    {% if entry.is_pingable %}
+    {% url blogentry-trackback slug=entry.slug as trackback_url %}
+    {% trackback_rdf entry.get_absolute_url entry.title trackback_url True %}
+    {% endif %}
+    ...
+
+Resulting in an embedded RDF document for our pingable entry that looks
+something like::
+
+     <!--
+     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:dc="http://purl.org/dc/elements/1.1/"
+                xmlns:trackback="http://madskills.com/public/xml/rss/module/trackback/">
+         <rdf:Description
+          rdf:about="http://example.com/blog/slug/"
+          dc:identifier="http://example.com/blog/slug/"
+          dc:title="A Blog Post"
+          trackback:ping="http://example.com/trackback/blog/slug/" />
+     </rdf:RDF>
+     -->
+
+Using the Backlinks client
+--------------------------
+
+Django Backlinks provides both Pingback and TrackBack client implementations
+as well as an interface that abstracts away these specific implementations.
+Each Backlinks module implementing a backlink protocol may define a client
+object with an ``autodiscover`` and ``ping`` method. The main interface
+that users of Django Backlinks probably want to use is the ``BacklinksClient``
+class, found in the ``backlinks.client`` module. An instance of this class
+is found by the name ``default_client`` in the same module. This object has
+the following method of interest:
+
+    ``ping_all``
+        Requires a single positional argument, ``markup``, which should be an
+	HTML document that will be parsed for external links. This method also
+	accepts the keyword arguments ``source_url``, the url of the document
+	represented by ``markup``, ``source_object``, the Django model instance
+	represented by ``markup``, ``title``, the title of the source object,
+	and ``excerpt``, a brief summary of the source document. Each external
+	link which is found to be pingable by the ``autodiscover`` method of
+	one of the clients in the ``INSTALLED_MODULES`` list will be pinged
+	using the corresponding ``ping`` method using parameters derived from
+	the parameters passed in to ``ping_url`` or the given markup.
+
+We can use the default client's methods to build our own client strategy
+for our projects and apps. For example, we might call ``ping_all`` in the
+``save`` method of our ``BlogEntry`` model when we have a new, published entry,
+using the ``content`` as our ``markup`` argument. We might find it cleaner
+to do the same thing in a ``post_save`` handler for ``BlogEntry``. Since
+autodiscovery and pinging may take more than a couple of seconds we might then
+find it advantageous to write a management command or script for use as
+a scheduled job. To these ends ``ping_all`` records attempted pings with either
+a success or failure status flag that we can make use of to determine which
+objects have not been processed by our scheduled ping task.
+
+Making use of Backlinks data
+----------------------------
+
+Since the purpose of backlinks is to connect together discussion about content
+hosted in disparate places, Django Backlinks ships with a simple template tag
+that allows us to retrieve all approved inbound pings on our content. To use
+the tag, simply load the ``backlinks_tags`` library, and call the
+``backlinks_for_model`` tag with a target model instance to populate a context
+variable with the set of approved ``backlinks.models.InboundBacklink`` objects
+for the instance. By default this context variable is named ``backlinks``, but
+the tag may optionally be called in the form
+``{% backlinks_for_model target_instance as <varname> %}`` to assign the set
+to an arbitrary variable.
+
+``InboundBacklink`` instances have the following attributes:
+
+    ``source_url``
+        The URL of the source of the ping
+
+    ``target_url``
+        The URL of the target of the ping
+
+    ``received``
+        The datetime the ping was received
+
+    ``title``
+        The title of the ping's source object
+
+    ``excerpt``
+        An excerpt or summary of the ping's source
+
+    ``protocol``
+        The name of the backlink protocol by which the ping was made
+
+    ``target_object``
+        The actual object that was targeted
+
+Continuing with the example template we started earlier in the Pingback
+and TrackBack server sections, we may choose to list all approved pings
+on the ``BlogEntry`` represented in our ``blog_entry_detail`` view using
+the ``blog/blog_entry_detail.html`` template::
+
+    ...
+    {% load backlinks_tags %}
+    {% backlinks_for_model entry as entry_pings %}
+    {% with entry_pings.count as num_pings %}
+    {% if num_pings %}
+    <p>This entry has been pinged {{ num_pings }} time{{ num_pings|pluralize:"s" }}</p>
+    <p>
+    <ul>
+    {% for ping in entry_pings %}
+    <li>From <a href="{{ ping.source_url }}">&ldquo;{{ ping.title }}&ldquo;</a> on the {{ received|date:"jS F, Y" }}: {{ ping.excerpt }}</li>
+    {% endfor %}
+    </ul>
+    </p>    
+    {% else %}
+    <p>This entry has not been pinged.</p>
+    {% endif %}
+    {% endwith %}
+    <p>TrackBack: {% url blogentry-trackback slug=entry.slug %}</p>
+    ...
+
+If you wish to get ``InboundBacklink`` data for model instances elsewhere,
+a custom manager method on the model's ``objects`` manager called ``for_model``
+will return a ``QuerySet`` of all records related to the passed in model
+instance.
+
+Further information
+===================
+
+Documentation on the API provided by Django Backlinks and discussion on how it
+may be extended and customized is covered in the ``api.txt`` file found in
+the ``docs/`` directory alongside this document.

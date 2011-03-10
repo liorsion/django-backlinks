@@ -1,0 +1,19 @@
+syntax: glob
+*.pyc
+*.pyo
+*~
+.installed.cfg
+backlinks-env
+bin
+develop-eggs
+dist
+downloads
+eggs
+parts
+MANIFEST
+src/*.egg-info
+backlinkstest/*.db
+
+syntax: regexp
+.*\#.*\#$
+docs/_build/(?!\.empty)
