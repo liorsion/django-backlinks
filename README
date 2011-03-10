@@ -13,3 +13,5 @@ this directory.
 
 For instructions on the usage of this application, please read ``overview.txt``
 located in the ``docs/`` directory.
+
+Original project by Jeff Kistler: https://bitbucket.org/jeffkistler/django-backlinks
